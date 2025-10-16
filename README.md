@@ -104,3 +104,75 @@ Run local: set USE_AWS=False, subscribe with mosquitto_sub -t "doorlock/group11/
 Run AWS: set USE_AWS=True, fill endpoint + cert paths, subscribe in AWS test client to doorlock/group11/#, run the script.
 
 Don’t commit certs/keys; send them out-of-band if needed.
+
+
+
+=================== PART 2 (Facial Recognition) =======================
+This phase extends the previous IoT door and motion system by integrating real-time face recognition using Raspberry Pi 5, Pi Camera Module 2, and OpenCV DNN models. The goal is to verify authorized users locally and publish recognition events to the same MQTT topic (local or AWS IoT Core).
+
+Hardware
+Component	Connection
+Raspberry Pi 5	Main controller
+Pi Camera Module 2	CSI port
+Existing LEDs, PIR, and magnetic switch	Same as in Part 1
+
+Software Dependencies
+sudo apt install -y python3-opencv libatlas-base-dev python3-picamera2
+pip install paho-mqtt numpy
+
+Optional (if using a virtual environment):
+python3 -m venv venv
+source venv/bin/activate
+
+Folder structure
+facerec/
+ ├── app.py
+ ├── enroll.py
+ ├── models/
+ │   ├── deploy.prototxt
+ │   ├── res10_300x300_ssd_iter_140000.caffemodel
+ │   └── face_recognition_sface_2021dec.onnx
+ ├── enroll/Vicky/        # captured images
+ └── templates/templates.json
+
+Step to Run
+1. Capture and Enroll Faces
+   
+Run once per user:
+python3 capture_faces.py "Enter name"
+python3 enroll.py
+
+This saves normalized embeddings to templates/templates.json.
+
+2. Run the Recognition App
+
+python3 app.py
+
+Shows live video stream.
+Detects and recognizes faces in real time.
+Publishes recognition results to MQTT.
+
+3. MQTT Output Examples
+{
+  "ts": "2025-10-15T03:12:05Z",
+  "device_id": "rpi5-group11",
+  "event": "face_ok",
+  "user": "Vicky",
+  "sim": 0.72
+}
+
+You can view these live: 
+mosquitto_sub -t "doorlock/group11/#" -v
+
+or in the AWS IoT Core MQTT Test Client if USE_AWS=True.
+
+4. Integration with IoT Door System
+
+Both scripts (iot_leds_mqtt.py and app.py) publish to the same topic
+doorlock/group11/telemetry, so you can see door events + face verification together.
+
+5. Expected Behavior
+
+When a person appears, the Pi recognizes the face and publishes the identity.
+When motion or door state changes, sensors publish status updates.
+The combined stream can later trigger cloud-side automation or access control logic.
