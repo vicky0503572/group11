@@ -14,18 +14,18 @@ LEDs:
 
 # 2) Software setup
    
-sudo apt update && sudo apt install -y mosquitto mosquitto-clients python3-rpi.gpio python3-pip
-pip3 install -r requirements.txt --break-system-packages
+*sudo apt update && sudo apt install -y mosquitto mosquitto-clients python3-rpi.gpio python3-pip*
+*pip3 install -r requirements.txt --break-system-packages*
 
 # 3) local test (no cloud)
    
 Edit iot_leds_mqtt.py:
   USE_AWS = False
 Open a subscriber in another terminal:
-  mosquitto_sub -t "doorlock/group11/telemetry" -v
+*mosquitto_sub -t "doorlock/group11/telemetry" -v*
 
 In other terminal run:
-  python3 iot_leds_mqtt.py
+  *python3 iot_leds_mqtt.py*
 
 Wave at PIR/open door -> see LEDs change + JSON publish + TinyDB logs in events.json
 
@@ -56,21 +56,21 @@ chmod 600 /home/pi/certs/*pem* /home/pi/certs/*crt
 
 Edit iot_leds_mqtt.py:
 
-USE_AWS = True
+*USE_AWS = True
 AWS_ENDPOINT = "xxxxx-ats.iot.us-<region>.amazonaws.com"
 CERT_DIR = "/home/pi/certs"
 AWS_CA   = f"{CERT_DIR}/AmazonRootCA1.pem"
 AWS_CERT = f"{CERT_DIR}/<hash>-certificate.pem.crt"
 AWS_KEY  = f"{CERT_DIR}/<hash>-private.pem.key"
 CLIENT_ID = "rpi5-group11"   # match Thing name if possible
-TOPIC_TELEMETRY = "doorlock/group11/telemetry"
+TOPIC_TELEMETRY = "doorlock/group11/telemetry"*
   
 Test in AWS console → Test → MQTT test client → subscribe to:
 
 doorlock/group11/telemetry
 
 Run: 
-python3 iot_leds_mqtt.py
+*python3 iot_leds_mqtt.py*
 
 # 5) What the script does
 
@@ -97,7 +97,7 @@ Sample payload:
 # TL;DR
 Wire PIR→GPIO17, door switch COM→3.3V & NO→GPIO27, LEDs on GPIO22/23 (with 330Ω).
 
-sudo apt install mosquitto mosquitto-clients python3-rpi.gpio && pip3 install -r requirements.txt --break-system-packages
+*sudo apt install mosquitto mosquitto-clients python3-rpi.gpio && pip3 install -r requirements.txt --break-system-packages*
 
 Run local: set USE_AWS=False, subscribe with mosquitto_sub -t "doorlock/group11/#" -v, then python3 iot_leds_mqtt.py.
 
@@ -107,40 +107,37 @@ Don’t commit certs/keys; send them out-of-band if needed.
 
 
 
-# =================== PART 2 (Facial Recognition) =======================
+# ======== PART 2 (Facial Recognition) ========
 This phase extends the previous IoT door and motion system by integrating real-time face recognition using Raspberry Pi 5, Pi Camera Module 2, and OpenCV DNN models. The goal is to verify authorized users locally and publish recognition events to the same MQTT topic (local or AWS IoT Core).
 
-Hardware
-Component	Connection
+**Hardware**
 Raspberry Pi 5	Main controller
 Pi Camera Module 2	CSI port
 Existing LEDs, PIR, and magnetic switch	Same as in Part 1
 
 **Software Dependencies**
-sudo apt install -y python3-opencv libatlas-base-dev python3-picamera2
-pip install paho-mqtt numpy
+*sudo apt install -y python3-opencv libatlas-base-dev python3-picamera2*
+*pip install paho-mqtt numpy*
 
 Optional (if using a virtual environment):
-python3 -m venv venv
-source venv/bin/activate
+*python3 -m venv venv*
+*source venv/bin/activate*
 
-# System Preparation:
+**System Preparation:**
 Make sure your Raspberry Pi OS is up to date and the camera interface is enabled:
-sudo apt update && sudo apt full-upgrade -y
-sudo raspi-config
+*sudo apt update && sudo apt full-upgrade -y*
+*sudo raspi-config*
 
 Then go to:
 Interface Options → Camera → Enable
 
 Reboot after this:
-sudo reboot
+*sudo reboot*
 
 **Install core dependencies:**
-sudo apt install -y python3-opencv python3-picamera2 python3-paho-mqtt \
-                    libatlas-base-dev gstreamer1.0-tools \
-                    gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+*sudo apt install -y python3-opencv python3-picamera2 python3-paho-mqtt \ libatlas-base-dev gstreamer1.0-tools \ gstreamer1.0-plugins-base gstreamer1.0-plugins-good*
 
-Folder structure
+**Folder structure**
 facerec/
  ├── app.py
  ├── enroll.py
@@ -151,21 +148,21 @@ facerec/
  ├── enroll/Vicky/        # captured images
  └── templates/templates.json
 
-Download models:
-mkdir -p ~/facerec/models && cd ~/facerec/models
-wget https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/deploy.prototxt
+**Download models:**
+*cd ~/facerec/models*
+*wget https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/deploy.prototxt
 wget https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel
-wget https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+wget https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx*
 
 Test the camera by running this line:
-rpicam-hello -t 2000
+*rpicam-hello -t 2000*
 
-Step to Run
+# Step to Run
 # 1. Capture and Enroll Faces
    
 Run once per user:
-python3 capture_faces.py "Enter name"
-python3 enroll.py
+*python3 capture_faces.py "Enter name"
+python3 enroll.py*
 
 This saves normalized embeddings to templates/templates.json.
 
@@ -202,6 +199,6 @@ When a person appears, the Pi recognizes the face and publishes the identity.
 When motion or door state changes, sensors publish status updates.
 The combined stream can later trigger cloud-side automation or access control logic.
 
-******To delete user's folder
+**To delete user's folder**
 cd ~/facerec/enroll
 rm -r "folder name"
