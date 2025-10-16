@@ -1,3 +1,6 @@
 paho-mqtt
 tinydb
 RPi.GPIO
+opencv-python
+numpy
+picamera2
