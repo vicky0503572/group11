@@ -33,7 +33,6 @@ AWS_PORT     = 8883
 TOPIC        = "doorlock/group11/telemetry"
 CLIENT_ID    = "pi5"
 DEVICE_ID    = "rpi5-group11"
-
 # Access logic: how long after a known face we still consider door "authorized"
 ACCESS_WINDOW = 5.0  # seconds
 
@@ -67,9 +66,10 @@ else:
 client.loop_start()
 
 def ts():
+    # You can ignore the deprecation warning; it's fine for class.
     return datetime.utcnow().isoformat() + "Z"
 
-# ================== FACE MODELS & ENROLLMENT ==================
+# ================== LOAD MODELS ==================
 print("Loading models...")
 DETECTOR = cv2.dnn.readNetFromCaffe(
     "models/deploy.prototxt",
@@ -77,18 +77,53 @@ DETECTOR = cv2.dnn.readNetFromCaffe(
 )
 EMB = cv2.dnn.readNetFromONNX("models/face_recognition_sface_2021dec.onnx")
 
+# ================== LOAD TEMPLATES (ROBUST) ==================
 with open("templates/templates.json") as f:
-    TEMPLATES = json.load(f)
-TEMPLATES = {k: np.array(v, dtype=np.float32) for k, v in TEMPLATES.items()}
+    templates_raw = json.load(f)
+
+# Support both:
+# - old format: "name": [0.1, 0.2, ...]
+# - new format: "name": [[0.1, 0.2, ...], [...], ...]
+TEMPLATES = {}
+for name, emb_list in templates_raw.items():
+    if not emb_list:
+        continue
+
+    # If first element is a number -> old single-vector format
+    if isinstance(emb_list[0], (int, float)):
+        vecs = [np.array(emb_list, dtype=np.float32)]
+    else:
+        # list-of-list format
+        vecs = [np.array(e, dtype=np.float32) for e in emb_list]
+
+    # Normalize each embedding
+    normed_vecs = []
+    for v in vecs:
+        v = v.astype(np.float32)
+        n = np.linalg.norm(v) + 1e-8
+        normed_vecs.append(v / n)
+
+    TEMPLATES[name] = normed_vecs
+
 ENROLLED = list(TEMPLATES.keys())
 print("Enrolled users:", ENROLLED if ENROLLED else "[none]")
+for name, emb_list in TEMPLATES.items():
+    print(f"  {name}: {len(emb_list)} embeddings, dim={emb_list[0].shape[0]}")
 
+# ================== FACE UTILS ==================
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b))
+    return float(
+        np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+    )
 
 def emb_from_crop(bgr: np.ndarray) -> np.ndarray:
     face = cv2.cvtColor(cv2.resize(bgr, (112, 112)), cv2.COLOR_BGR2RGB).astype(np.float32)
-    blob = cv2.dnn.blobFromImage(face, scalefactor=1.0/255.0, size=(112, 112), swapRB=False)
+    blob = cv2.dnn.blobFromImage(
+        face,
+        scalefactor=1.0/255.0,
+        size=(112, 112),
+        swapRB=False
+    )
     EMB.setInput(blob)
     e = EMB.forward().reshape(-1).astype(np.float32)
     norm = np.linalg.norm(e) + 1e-8
@@ -114,8 +149,6 @@ def detect_faces(frame: np.ndarray):
             if x2 > x1 and y2 > y1:
                 faces.append((x1, y1, x2, y2, conf))
     return faces
-
-# ================== PUBLISH HELPERS ==================
 def publish_sensor_state(motion, door_closed, authorized_open, user):
     payload = {
         "ts": ts(),
@@ -133,7 +166,7 @@ def publish_face_event(event: str, user: str, sim: float):
     payload = {
         "ts": ts(),
         "device_id": DEVICE_ID,
-        "event": event,     # "face_ok" or "unknown"
+        "event": event,     # "face_ok", "ambiguous", or "unknown"
         "user": user,
         "sim": round(sim, 3),
     }
@@ -148,7 +181,9 @@ picam2.configure(picam2.create_preview_configuration(
 picam2.start()
 time.sleep(0.2)
 
-THRESH = 0.60
+THRESH = 0.90   # similarity threshold for "known"
+MARGIN = 0.03   # required gap between best and second-best
+
 face_cooldown_until = 0.0
 
 # State for access & face LED logic
@@ -160,7 +195,6 @@ print("Stabilizing PIR...")
 time.sleep(5)
 print(("AWS" if USE_AWS else "LOCAL") + " mode, publishing on", TOPIC)
 print("System ready. Press 'q' to quit.")
-
 # Prime sensor state
 last_motion = GPIO.input(PIR_PIN)
 last_door   = GPIO.input(DOOR_PIN)
@@ -200,38 +234,76 @@ try:
             crop = frame[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
-
             e = emb_from_crop(crop)
-            best_name, best_sim = "unknown", 0.0
-            for name, tmpl in TEMPLATES.items():
-                sim = cosine(e, tmpl)
-                if sim > best_sim:
-                    best_name, best_sim = name, sim
 
-            color = (0, 255, 0) if best_sim >= THRESH else (0, 0, 255)
-            label = f"{best_name}:{best_sim:.2f}"
+            best_name = "unknown"
+            best_sim = 0.0
+            second_sim = 0.0
+
+            # Optional debug: per-user max sim
+            # debug_line = []
+
+            for name, vecs in TEMPLATES.items():
+                sims = [cosine(e, v) for v in vecs]
+                person_best = max(sims)
+
+                # debug_line.append(f"{name}:{person_best:.3f}")
+
+                if person_best > best_sim:
+                    second_sim = best_sim
+                    best_sim = person_best
+                    best_name = name
+                elif person_best > second_sim:
+                    second_sim = person_best
+
+            # if debug_line:
+            #     print("Sims ->", " | ".join(debug_line))
+
+            # Decide if this is a confident match, ambiguous, or unknown
+            confident_match = (best_sim >= THRESH) and ((best_sim - second_sim) >= MARGIN)
+
+            if confident_match:
+                color = (0, 255, 0)
+                show_name = best_name
+            elif best_sim >= THRESH:
+                color = (0, 255, 255)  # yellow = ambiguous
+                show_name = "ambiguous"
+            else:
+                color = (0, 0, 255)
+                show_name = "unknown"
+
+            label = f"{show_name}:{best_sim:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, label, (x1, max(0, y1 - 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            # Remember last known face for access logic
-            if best_sim >= THRESH:
+            # Remember last known face for access logic (only if confident)
+            if confident_match:
                 last_face_ok_time = now
                 last_known_user = best_name
                 GPIO.output(LED_FACE, GPIO.HIGH)
                 face_led_until = now + 3.0   # keep face LED on for 3s
 
+            # Publish face events with cooldown
             if now >= face_cooldown_until:
-                ev = "face_ok" if best_sim >= THRESH else "unknown"
-                publish_face_event(ev, best_name, best_sim)
-                face_cooldown_until = now + (3 if best_sim >= THRESH else 1)
+                if confident_match:
+                    ev = "face_ok"
+                    user_for_event = best_name
+                elif best_sim >= THRESH:
+                    ev = "ambiguous"
+                    user_for_event = "ambiguous"
+                else:
+                    ev = "unknown"
+                    user_for_event = "unknown"
+
+                publish_face_event(ev, user_for_event, best_sim)
+                face_cooldown_until = now + (3 if confident_match else 1)
 
         cv2.imshow("Doorlock: Sensors + Face Recognition", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
         time.sleep(0.02)
-
 except KeyboardInterrupt:
     pass
 finally:
